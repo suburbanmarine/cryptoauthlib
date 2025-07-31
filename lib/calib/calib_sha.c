@@ -70,11 +70,14 @@ typedef struct
  */
 ATCA_STATUS calib_sha_base(ATCADevice device, uint8_t mode, uint16_t length, const uint8_t* message, uint8_t* data_out, uint16_t* data_out_size)
 {
-    ATCAPacket packet;
+    ATCAPacket * packet = NULL;
     ATCA_STATUS status;
+
     uint8_t cmd_mode = (mode & SHA_MODE_MASK);
 
+#if ATCA_CHECK_PARAMS_EN
     ATCA_CHECK_INVALID_MSG(NULL == device, ATCA_BAD_PARAM, "NULL pointer received");
+#endif
 
     ATCA_CHECK_INVALID_MSG((cmd_mode != SHA_MODE_SHA256_PUBLIC && cmd_mode != SHA_MODE_HMAC_START &&
                             cmd_mode != SHA_MODE_ECC204_HMAC_START && length > 0u && message == NULL),
@@ -87,41 +90,53 @@ ATCA_STATUS calib_sha_base(ATCADevice device, uint8_t mode, uint16_t length, con
 
     do
     {
-        (void)memset(&packet, 0x00, sizeof(ATCAPacket));
+        packet = calib_packet_alloc();
+        if(NULL == packet)
+        {
+            (void)ATCA_TRACE(ATCA_ALLOC_FAILURE, "calib_packet_alloc - failed");
+            status = ATCA_ALLOC_FAILURE;
+            break;
+        }
+
+        (void)memset(packet, 0x00, sizeof(ATCAPacket));
 
         //Build Command
-        packet.param1 = mode;
-        packet.param2 = cmd_mode != SHA_MODE_ECC204_HMAC_START ? length : 0u;
+        packet->param1 = mode;
+        packet->param2 = cmd_mode != SHA_MODE_ECC204_HMAC_START ? length : 0u;
 
         if (cmd_mode != SHA_MODE_SHA256_PUBLIC && cmd_mode != SHA_MODE_HMAC_START && length != 0u)
         {
-            (void)memcpy(packet.data, message, (size_t)length);
+            (void)memcpy(packet->data, message, (size_t)length);
         }
 
-        if ((status = atSHA(atcab_get_device_type_ext(device), &packet, length)) != ATCA_SUCCESS)
+        if ((status = atSHA(atcab_get_device_type_ext(device), packet, length)) != ATCA_SUCCESS)
         {
             (void)ATCA_TRACE(status, "atSHA - failed");
             break;
         }
 
-        if ((status = atca_execute_command(&packet, device)) != ATCA_SUCCESS)
+        if ((status = atca_execute_command(packet, device)) != ATCA_SUCCESS)
         {
             (void)ATCA_TRACE(status, "calib_sha_base - exection failed");
             break;
         }
 
-        if ((data_out != NULL) && (packet.data[ATCA_COUNT_IDX] > 4u))
+        if ((data_out != NULL) && (packet->data[ATCA_COUNT_IDX] > 4u))
         {
-            if ((uint16_t)packet.data[ATCA_COUNT_IDX] - ATCA_PACKET_OVERHEAD > *data_out_size)
+            if ((uint16_t)packet->data[ATCA_COUNT_IDX] - ATCA_PACKET_OVERHEAD > *data_out_size)
             {
                 status = ATCA_SMALL_BUFFER;
                 break;
             }
-            *data_out_size = ((uint16_t)packet.data[ATCA_COUNT_IDX] - ATCA_PACKET_OVERHEAD) & UINT16_MAX;
-            (void)memcpy(data_out, &packet.data[ATCA_RSP_DATA_IDX], *data_out_size);
+            /* coverity[misra_c_2012_rule_10_1_violation:FALSE] The cast ensures size arithmetic is correctly promoted for subtraction */
+            /* coverity[misra_c_2012_rule_10_3_violation:FALSE] This ensures arithmetic operations are performed in a larger domain, which avoids overflow */
+            /* coverity[misra_c_2012_rule_10_4_violation:FALSE] The final result is explicitly masked with UINT16_MAX to ensure predictable behavior across compilers */
+            *data_out_size = ((uint16_t)packet->data[ATCA_COUNT_IDX] - ATCA_PACKET_OVERHEAD) & UINT16_MAX;
+            (void)memcpy(data_out, &packet->data[ATCA_RSP_DATA_IDX], *data_out_size);
         }
     } while (false);
 
+    calib_packet_free(packet);
     return status;
 }
 
@@ -293,10 +308,12 @@ ATCA_STATUS calib_hw_sha2_256_finish(ATCADevice device, atca_sha256_ctx_t* ctx, 
 {
     ATCA_STATUS status = ATCA_SUCCESS;
 
+#if ATCA_CHECK_PARAMS_EN
     if (device == NULL)
     {
         return ATCA_TRACE(ATCA_BAD_PARAM, "NULL pointer received");
     }
+#endif
 
 #ifdef ATCA_ATSHA204A_SUPPORT
     if (device->mIface.mIfaceCFG->devtype == ATSHA204A)
@@ -349,6 +366,7 @@ ATCA_STATUS calib_hw_sha2_256_finish(ATCADevice device, atca_sha256_ctx_t* ctx, 
     else
 #endif
     {
+        /* coverity[misra_c_2012_rule_10_4_violation:FALSE] The final result is explicitly masked with UINT16_MAX to ensure predictable behavior across compilers */
         if (ATCA_SUCCESS != (status = calib_sha_end(device, digest, (uint16_t)(ctx->block_size & UINT16_MAX), ctx->block)))
         {
             return ATCA_TRACE(status, "calib_sha_end - failed");
@@ -493,10 +511,12 @@ ATCA_STATUS calib_sha_hmac_finish(ATCADevice device, atca_hmac_sha256_ctx_t *ctx
     uint16_t digest_size = 32;
     ATCADeviceType dev_type = device->mIface.mIfaceCFG->devtype;
 
+#if ATCA_CHECK_PARAMS_EN
     if (device == NULL)
     {
         return ATCA_TRACE(ATCA_BAD_PARAM, "NULL pointer received");
     }
+#endif
 
     switch (dev_type)
     {
@@ -517,6 +537,8 @@ ATCA_STATUS calib_sha_hmac_finish(ATCADevice device, atca_hmac_sha256_ctx_t *ctx
 
     mode |= target;
 
+    /* coverity[misra_c_2012_rule_10_1_violation:FALSE] The cast ensures size arithmetic is correctly promoted for subtraction */
+    /* coverity[misra_c_2012_rule_10_4_violation:FALSE] The final result is explicitly masked with UINT16_MAX to ensure predictable behavior across compilers */
     return calib_sha_base(device, mode, (uint16_t)(ctx->block_size & UINT16_MAX), ctx->block, digest, &digest_size);
 }
 

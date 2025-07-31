@@ -8,12 +8,13 @@ device. The family of devices supported currently are:
 
 |CryptoAuth                                      |CryptoAuth2                               |
 |-----------------------------------------------:|:-----------------------------------------|
-|[ATECC608B](https://www.microchip.com/ATECC608B)|[ECC204](https://www.microchip.com/ECC204)|
-|[ATECC608A](http://www.microchip.com/ATECC608A) |[ECC206](https://www.microchip.com/ECC206)|
-|[ATECC508A](http://www.microchip.com/ATECC508A) |[SHA104](https://www.microchip.com/SHA104)|
-|[ATECC108A](http://www.microchip.com/ATECC108A) |[SHA105](https://www.microchip.com/SHA105)|
-|[ATSHA204A](http://www.microchip.com/ATSHA204A) |[SHA106](https://www.microchip.com/SHA106)|
-|[ATSHA206A](https://www.microchip.com/ATSHA206A)|[RNG90](https://www.microchip.com/RNG90)  |
+|[ATECC608C](https://www.microchip.com/ATECC608C)|[ECC204](https://www.microchip.com/ECC204)|
+|[ATECC608B](https://www.microchip.com/ATECC608B)|[ECC206](https://www.microchip.com/ECC206)|
+|[ATECC608A](http://www.microchip.com/ATECC608A) |[SHA104](https://www.microchip.com/SHA104)|
+|[ATECC508A](http://www.microchip.com/ATECC508A) |[SHA105](https://www.microchip.com/SHA105)|
+|[ATECC108A](http://www.microchip.com/ATECC108A) |[SHA106](https://www.microchip.com/SHA106)|
+|[ATSHA204A](http://www.microchip.com/ATSHA204A) |[RNG90](https://www.microchip.com/RNG90)  |
+|[ATSHA206A](https://www.microchip.com/ATSHA206A)|                                          |
 
 The best place to start is with the [Microchip Trust Platform](https://www.microchip.com/design-centers/security-ics/trust-platform)
 
@@ -131,7 +132,7 @@ Directory Structure
 lib - primary library source code
 lib/atcacert - certificate data and i/o methods
 lib/calib - the Basic Cryptoauth API
-lib/crypto - Software crypto implementations external crypto libraries support (primarily SHA1 and SHA256)
+lib/crypto - Software crypto implementations external crypto libraries support (primarily SHA1 and SHA2)
 lib/hal - hardware abstraction layer code for supporting specific platforms
 lib/host - support functions for common host-side calculations
 lib/jwt - json web token functions

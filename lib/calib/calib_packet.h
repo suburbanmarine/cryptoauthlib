@@ -1,7 +1,13 @@
 /**
  * \file
+ * \brief Defines packet allocation functions
  *
- * \copyright (c) 2015-2020 Microchip Technology Inc. and its subsidiaries.
+ * The APIs are used for allocating packets in heap or bss according to 
+ * atcab heap availability. Corresponding memory free is done
+ *
+ * This supports the ATECC device family.
+ *
+ * \copyright (c) 2024 Microchip Technology Inc. and its subsidiaries.
  *
  * \page License
  *
@@ -23,32 +29,31 @@
  * THE AMOUNT OF FEES, IF ANY, THAT YOU HAVE PAID DIRECTLY TO MICROCHIP FOR
  * THIS SOFTWARE.
  */
-#include "atca_test.h"
-#ifndef DO_NOT_TEST_CERT
 
-#ifdef __GNUC__
-// Unity macros trigger this warning
-#pragma GCC diagnostic ignored "-Wnested-externs"
+
+#ifndef CALIB_PACKET_H
+#define CALIB_PACKET_H
+
+#include "calib_command.h"
+#include "atca_device.h"
+#include "atca_config.h"
+
+#ifdef __cplusplus
+extern "C" {
 #endif
 
-TEST_GROUP_RUNNER(atcacert_der_enc_length)
+typedef struct calib_packet_cache_s
 {
-    RUN_TEST_CASE(atcacert_der_enc_length, short_form);
-    RUN_TEST_CASE(atcacert_der_enc_length, long_form_2byte);
-    RUN_TEST_CASE(atcacert_der_enc_length, long_form_3byte);
-    RUN_TEST_CASE(atcacert_der_enc_length, long_form_4byte);
-    RUN_TEST_CASE(atcacert_der_enc_length, long_form_5byte);
-    RUN_TEST_CASE(atcacert_der_enc_length, small_buf);
-    RUN_TEST_CASE(atcacert_der_enc_length, bad_params);
-}
+    ATCAPacket packet_pool;
+    bool used;
+}calib_packet_cache_t;
 
-TEST_GROUP_RUNNER(atcacert_der_dec_length)
-{
-    RUN_TEST_CASE(atcacert_der_dec_length, good);
-    RUN_TEST_CASE(atcacert_der_dec_length, zero_size);
-    RUN_TEST_CASE(atcacert_der_dec_length, not_enough_data);
-    RUN_TEST_CASE(atcacert_der_dec_length, indefinite_form);
-    RUN_TEST_CASE(atcacert_der_dec_length, too_large);
-    RUN_TEST_CASE(atcacert_der_dec_length, bad_params);
+ATCAPacket* calib_packet_alloc(void);
+
+void calib_packet_free(ATCAPacket* packet);
+
+#ifdef __cplusplus
 }
 #endif
+
+#endif /* CALIB_PACKET_H */

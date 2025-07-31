@@ -71,9 +71,11 @@ bool atcab_is_ta_device(ATCADeviceType dev_type);
 #include "crypto/atca_crypto_hw_aes.h"
 
 // Hardware Accelerated algorithms
+#if ATCAB_PBKDF2_SHA256_EN
 ATCA_STATUS atcab_pbkdf2_sha256_ext(ATCADevice device, const uint32_t iter, const uint16_t slot, const uint8_t* salt, const size_t salt_len, uint8_t* result,
                                     size_t result_len);
 ATCA_STATUS atcab_pbkdf2_sha256(const uint32_t iter, const uint16_t slot, const uint8_t* salt, const size_t salt_len, uint8_t* result, size_t result_len);
+#endif
 
 #ifdef ATCA_USE_ATCAB_FUNCTIONS
 
@@ -206,6 +208,7 @@ ATCA_STATUS atcab_random_ext(ATCADevice device, uint8_t* rand_out);
 
 // Read command functions
 ATCA_STATUS atcab_read_zone(uint8_t zone, uint16_t slot, uint8_t block, uint8_t offset, uint8_t* data, uint8_t len);
+ATCA_STATUS atcab_read_zone_ext(ATCADevice device, uint8_t zone, uint16_t slot, uint8_t block, uint8_t offset, uint8_t* data, uint8_t len);
 ATCA_STATUS atcab_is_locked(uint8_t zone, bool* is_locked);
 ATCA_STATUS atcab_is_config_locked(bool* is_locked);
 ATCA_STATUS atcab_is_config_locked_ext(ATCADevice device, bool* is_locked);

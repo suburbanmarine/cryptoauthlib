@@ -28,6 +28,8 @@
 #ifndef ATCA_MBEDTLS_WRAP_H
 #define ATCA_MBEDTLS_WRAP_H
 
+#include "atca_config_check.h"
+
 #ifdef ATCA_MBEDTLS
 
 #ifdef __COVERITY__
@@ -63,10 +65,26 @@ typedef struct atcac_sha1_ctx
     mbedtls_md_context_t mctx;
 } atcac_sha1_ctx_t;
 
+#if ATCAC_SHA256_EN
 typedef struct atcac_sha2_256_ctx
 {
     mbedtls_md_context_t mctx;
 } atcac_sha2_256_ctx_t;
+#endif
+
+#if ATCAC_SHA384_EN
+typedef struct atcac_sha2_384_ctx
+{
+    mbedtls_md_context_t mctx;
+} atcac_sha2_384_ctx_t;
+#endif
+
+#if ATCAC_SHA512_EN
+typedef struct atcac_sha2_512_ctx
+{
+    mbedtls_md_context_t mctx;
+} atcac_sha2_512_ctx_t;
+#endif
 
 typedef struct atcac_hmac_ctx
 {
@@ -132,8 +150,8 @@ typedef struct atca_mbedtls_eckey_s
 } atca_mbedtls_eckey_t;
 
 /* Integration Helper */
-int atca_mbedtls_ecdsa_sign(const mbedtls_mpi* d, mbedtls_mpi* r, mbedtls_mpi* s,
-                            const unsigned char* buf, size_t buf_len);
+int atca_mbedtls_ecdsa_sign(const mbedtls_mpi* data, mbedtls_mpi* r, mbedtls_mpi* s,
+                            const unsigned char* msg, size_t msg_len);
 
 /* Wrapper Functions */
 int atca_mbedtls_pk_init_ext(ATCADevice device, mbedtls_pk_context* pkey, const uint16_t slotid);

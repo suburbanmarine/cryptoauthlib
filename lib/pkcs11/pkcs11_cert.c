@@ -41,12 +41,13 @@
 #include "pkcs11_os.h"
 #include "pkcs11_util.h"
 #include "pkcs11_slot.h"
+#include "pkcs11_key.h"
 
 /**
  * \defgroup pkcs11 Key (pkcs11_key_)
    @{ */
 
-#if !defined(ATCA_NO_HEAP) && (FEATURE_ENABLED == ATCACERT_INTEGRATION_EN)
+#if defined(ATCA_HEAP) && (FEATURE_ENABLED == ATCACERT_INTEGRATION_EN)
 typedef struct pkcs11_cert_cache_s
 {
     CK_ATTRIBUTE            cert_x509_parse;
@@ -61,13 +62,14 @@ static pkcs11_cert_cache pkcs11_cert_cache_list[PKCS11_MAX_CERTS_CACHED];
 #endif
 
 
-#if defined(ATCA_TNGTLS_SUPPORT) || defined(ATCA_TNGLORA_SUPPORT) || defined(ATCA_TFLEX_SUPPORT)
-static void pkcs11_cert_check_trust_data(pkcs11_object_ptr pObject)
+#if (defined(ATCA_TNGTLS_SUPPORT) || defined(ATCA_TNGLORA_SUPPORT) || defined(ATCA_TFLEX_SUPPORT)) && ATCACERT_COMPCERT_EN
+static CK_RV pkcs11_cert_check_trust_data(pkcs11_object_ptr pObject, pkcs11_session_ctx_ptr pSession)
 {
-    if ((PKCS11_OBJECT_FLAG_TRUST_TYPE == (PKCS11_OBJECT_FLAG_TRUST_TYPE & pObject->flags)) && (NULL == pObject->data))
+    CK_RV rv = CKR_ARGUMENTS_BAD;
+    if ((PKCS11_OBJECT_FLAG_TRUST_TYPE == (PKCS11_OBJECT_FLAG_TRUST_TYPE & pObject->flags)) && (NULL == pObject->data) && (NULL != pSession))
     {
         const atcacert_def_t * cert_def = NULL;
-        (void)tng_get_device_cert_def(&cert_def);
+        rv = pkcs11_util_convert_rv(tng_get_device_cert_def_ext(pSession->slot->device_ctx, &cert_def));
 
         if (NULL != cert_def)
         {
@@ -85,6 +87,7 @@ static void pkcs11_cert_check_trust_data(pkcs11_object_ptr pObject)
             }
         }
     }
+    return rv;
 }
 #endif
 
@@ -98,7 +101,7 @@ static CK_RV pkcs11_cert_load_cache(const pkcs11_session_ctx_ptr pSession, const
     if ((pObject->class_id == CKO_CERTIFICATE) &&
         (pObject->class_type == CK_CERTIFICATE_CATEGORY_TOKEN_USER))
     {
-#if !defined(ATCA_NO_HEAP) && (FEATURE_ENABLED == ATCACERT_INTEGRATION_EN)
+#if defined(ATCA_HEAP) && (FEATURE_ENABLED == ATCACERT_INTEGRATION_EN)
         if (NULL == pObject->data)
         {
             /* Find free cert cache slot*/
@@ -182,31 +185,38 @@ static CK_RV pkcs11_cert_load_ca(pkcs11_object_ptr pObject, CK_ATTRIBUTE_PTR pAt
             size_t temp = pAttribute->ulValueLen;
 
 #if (FEATURE_ENABLED == ATCACERT_INTEGRATION_EN)
-            cert_status = atcacert_read_cert_ext(device, (atcacert_def_t*)pObject->data, NULL, (uint8_t*)pAttribute->pValue, &temp);
-#else
-            ATCA_STATUS status = ATCA_SUCCESS;
-            uint8_t ca_key[64] = { 0 };
-
-            if (NULL != cert_cfg->ca_cert_def)
+            if (CERTTYPE_X509_FULL_STORED == cert_cfg->type)
             {
-                if (cert_cfg->ca_cert_def->public_key_dev_loc.is_genkey == 1u)
-                {
-                    status = atcab_get_pubkey_ext(device, cert_cfg->ca_cert_def->public_key_dev_loc.slot, ca_key);
-                }
-                else
-                {
-                    status = atcab_read_pubkey_ext(device, cert_cfg->ca_cert_def->public_key_dev_loc.slot, ca_key);
-                }
+                cert_status = atcacert_read_cert_ext(device, (atcacert_def_t*)pObject->data, NULL, (uint8_t*)pAttribute->pValue, &temp);
             }
-
-            if (ATCA_SUCCESS != status)
-            {
-                return CKR_DEVICE_ERROR;
-            }
-
-            cert_status = atcacert_read_cert_ext(device, (atcacert_def_t*)pObject->data, (cert_cfg->ca_cert_def != NULL) ? ca_key : NULL,
-                                                 (uint8_t*)pAttribute->pValue, &temp);
+            else
 #endif
+            {
+                ATCA_STATUS status = ATCA_SUCCESS;
+                uint8_t ca_key[64] = { 0 };
+                cal_buffer ca_key_buf = CAL_BUF_INIT(sizeof(ca_key), ca_key);
+
+                if (NULL != cert_cfg->ca_cert_def)
+                {
+                    if (cert_cfg->ca_cert_def->public_key_dev_loc.is_genkey == 1u)
+                    {
+                        status = atcab_get_pubkey_ext(device, cert_cfg->ca_cert_def->public_key_dev_loc.slot, ca_key);
+                    }
+                    else
+                    {
+                        status = atcab_read_pubkey_ext(device, cert_cfg->ca_cert_def->public_key_dev_loc.slot, ca_key);
+                    }
+                }
+
+                if (ATCA_SUCCESS != status)
+                {
+                    return CKR_DEVICE_ERROR;
+                }
+
+                cert_status = atcacert_read_cert_ext(device, (atcacert_def_t*)pObject->data, (cert_cfg->ca_cert_def != NULL) ? &ca_key_buf : NULL,
+                                                     (uint8_t*)pAttribute->pValue, &temp);
+            }
+
             pAttribute->ulValueLen = (uint32_t)(temp & 0xffffffffu);
 
             if (ATCACERT_E_DECODING_ERROR == cert_status)
@@ -220,7 +230,7 @@ static CK_RV pkcs11_cert_load_ca(pkcs11_object_ptr pObject, CK_ATTRIBUTE_PTR pAt
         }
         else
         {
-            size_t cert_size;
+            size_t cert_size = 0u;
 
             if (ATCACERT_E_SUCCESS != atcacert_read_cert_size_ext(device, cert_cfg, &cert_size))
             {
@@ -241,39 +251,38 @@ static CK_RV pkcs11_cert_load_ca(pkcs11_object_ptr pObject, CK_ATTRIBUTE_PTR pAt
 #if ATCA_TA_SUPPORT
 static CK_RV pkcs11_cert_load_ta(pkcs11_object_ptr pObject, CK_ATTRIBUTE_PTR pAttribute, ATCADevice device)
 {
-    ta_handle_info handle_info;
+    ATCA_STATUS status = ATCA_BAD_PARAM;
 
-    ATCA_STATUS status = talib_info_get_handle_info(device, pObject->slot, &handle_info);
-
-    if (ATCA_SUCCESS == status)
+    if (NULL != pObject->data)
     {
-        if (NULL != pObject->data)
+        atcacert_def_t * cert_def = (atcacert_def_t*)pObject->data;
+        if ((NULL == pAttribute->pValue) && (0u == pAttribute->ulValueLen))
         {
-            size_t cert_size = (size_t)handle_info.attributes.property;
-
-            if ((NULL != pAttribute->pValue) && (pAttribute->ulValueLen >= cert_size))
+            size_t cert_size = 0x00;
+            if (ATCACERT_E_SUCCESS != (status = atcacert_read_cert_ext(device, cert_def, NULL, NULL, &cert_size)))
             {
-                atcacert_def_t * cert_def = (atcacert_def_t*)pObject->data;
-                uint8_t* cert = (uint8_t*)pAttribute->pValue;
-                if (ATCACERT_E_SUCCESS != (status = atcacert_read_cert_ext(device, cert_def, NULL, cert, &cert_size)))
-                {
-                    return pkcs11_util_convert_rv(status);
-                }
-                pAttribute->ulValueLen = (CK_ULONG)(cert_size);
+                return pkcs11_util_convert_rv(status);
             }
-            else
+            //Full certificate size
+            pAttribute->ulValueLen = cert_size;
+        }
+        else if ((NULL != pAttribute->pValue) && (0u != pAttribute->ulValueLen))
+        {
+            uint8_t* cert = (uint8_t*)pAttribute->pValue;
+            size_t cert_size = pAttribute->ulValueLen;
+            if (ATCACERT_E_SUCCESS != (status = atcacert_read_cert_ext(device, cert_def, NULL, cert, &cert_size)))
             {
-                pAttribute->ulValueLen = (CK_ULONG)(cert_size);
+                return pkcs11_util_convert_rv(status);
             }
         }
         else
         {
-            (void)pkcs11_attrib_empty(NULL, pAttribute, NULL);
+            status = ATCA_SUCCESS;
         }
     }
     else
     {
-        return CKR_GENERAL_ERROR;
+        (void)pkcs11_attrib_empty(NULL, pAttribute, NULL);
     }
 
     return pkcs11_util_convert_rv(status);
@@ -307,16 +316,18 @@ CK_RV pkcs11_cert_load(pkcs11_object_ptr pObject, CK_ATTRIBUTE_PTR pAttribute, A
 static CK_RV pkcs11_cert_get_encoded(CK_VOID_PTR pObject, CK_ATTRIBUTE_PTR pAttribute, pkcs11_session_ctx_ptr psession)
 {
     pkcs11_object_ptr obj_ptr = (pkcs11_object_ptr)pObject;
+    CK_RV rv = CKR_ARGUMENTS_BAD;
 
     if (NULL != obj_ptr && NULL != psession)
     {
+        if (PKCS11_OBJECT_FLAG_TRUST_TYPE == (PKCS11_OBJECT_FLAG_TRUST_TYPE & obj_ptr->flags))
+        {
 #if defined(ATCA_TNGTLS_SUPPORT) || defined(ATCA_TNGLORA_SUPPORT) || defined(ATCA_TFLEX_SUPPORT)
-        pkcs11_cert_check_trust_data(obj_ptr);
+            (void)pkcs11_cert_check_trust_data(obj_ptr, psession);
+            return pkcs11_cert_load(obj_ptr, pAttribute, psession->slot->device_ctx);
 #endif
-
-#if !defined(ATCA_NO_HEAP) && (FEATURE_ENABLED == ATCACERT_INTEGRATION_EN)
-        CK_RV rv = CKR_GENERAL_ERROR;
-
+        }
+        #if defined(ATCA_HEAP) && (FEATURE_ENABLED == ATCACERT_INTEGRATION_EN)
         rv = pkcs11_cert_load_cache(psession, obj_ptr);
         if (CKR_OK == rv)
         {
@@ -327,28 +338,30 @@ static CK_RV pkcs11_cert_get_encoded(CK_VOID_PTR pObject, CK_ATTRIBUTE_PTR pAttr
                     (pkcs11_cert_cache_list[i].pObject_cert == pObject))
                 {
                     return pkcs11_attrib_fill(pAttribute, pkcs11_cert_cache_list[i].cert_x509_parse.pValue,
-                                              pkcs11_cert_cache_list[i].cert_x509_parse.ulValueLen);
+                                            pkcs11_cert_cache_list[i].cert_x509_parse.ulValueLen);
                 }
             }
         }
-#else
+        #else
         return pkcs11_cert_load(obj_ptr, pAttribute, psession->slot->device_ctx);
-#endif
+        #endif      
     }
-
-    return CKR_ARGUMENTS_BAD;
+    return rv;
 }
 
 #if ATCA_CA_SUPPORT
-static CK_RV pkcs11_cert_get_type_ca(pkcs11_object_ptr pObject, CK_ATTRIBUTE_PTR pAttribute)
+static CK_RV pkcs11_cert_get_type_ca(pkcs11_object_ptr pObject, CK_ATTRIBUTE_PTR pAttribute, pkcs11_session_ctx_ptr psession)
 {
     CK_RV rv = CKR_ARGUMENTS_BAD;
 
     if (NULL != pObject)
     {
+        if (PKCS11_OBJECT_FLAG_TRUST_TYPE == (PKCS11_OBJECT_FLAG_TRUST_TYPE & pObject->flags))
+        {
 #if defined(ATCA_TNGTLS_SUPPORT) || defined(ATCA_TNGLORA_SUPPORT) || defined(ATCA_TFLEX_SUPPORT)
-        pkcs11_cert_check_trust_data(pObject);
+            (void)pkcs11_cert_check_trust_data(pObject, psession);
 #endif
+        }
 
         if (NULL != pObject->data)
         {
@@ -377,17 +390,20 @@ static CK_RV pkcs11_cert_get_type(CK_VOID_PTR pObject, CK_ATTRIBUTE_PTR pAttribu
 {
     CK_RV rv = CKR_GENERAL_ERROR;
 
-    if (atcab_is_ca_device(atcab_get_device_type_ext(psession->slot->device_ctx)))
+    if (NULL != psession)
     {
+        if (atcab_is_ca_device(atcab_get_device_type_ext(psession->slot->device_ctx)))
+        {
 #if ATCA_CA_SUPPORT
-        rv = pkcs11_cert_get_type_ca((pkcs11_object_ptr)pObject, pAttribute);
+            rv = pkcs11_cert_get_type_ca((pkcs11_object_ptr)pObject, pAttribute, psession);
 #else
-        ((void)pObject);
+            ((void)pObject);
 #endif
-    }
-    else
-    {
-        rv = pkcs11_attrib_value(pAttribute, CKC_X_509, (CK_ULONG)sizeof(CK_CERTIFICATE_TYPE));
+        }
+        else
+        {
+            rv = pkcs11_attrib_value(pAttribute, CKC_X_509, (CK_ULONG)sizeof(CK_CERTIFICATE_TYPE));
+        }
     }
 
     return rv;
@@ -400,11 +416,16 @@ static CK_RV pkcs11_cert_get_subject(CK_VOID_PTR pObject, CK_ATTRIBUTE_PTR pAttr
 
     if (NULL != obj_ptr && NULL != psession)
     {
+        if (PKCS11_OBJECT_FLAG_TRUST_TYPE == (PKCS11_OBJECT_FLAG_TRUST_TYPE & obj_ptr->flags))
+        {
 #if defined(ATCA_TNGTLS_SUPPORT) || defined(ATCA_TNGLORA_SUPPORT) || defined(ATCA_TFLEX_SUPPORT)
-        pkcs11_cert_check_trust_data(obj_ptr);
+            (void)pkcs11_cert_check_trust_data(obj_ptr, psession);
 #endif
-
-        rv = pkcs11_cert_load_cache(psession, obj_ptr);
+        }
+        else
+        {
+            rv = pkcs11_cert_load_cache(psession, obj_ptr);
+        }
 
         if (NULL != obj_ptr->data)
         {
@@ -425,7 +446,7 @@ static CK_RV pkcs11_cert_get_subject(CK_VOID_PTR pObject, CK_ATTRIBUTE_PTR pAttr
                         return CKR_DEVICE_ERROR;
                     }
                 }
-                #if !defined(ATCA_NO_HEAP) && ATCA_CA_SUPPORT
+                #if defined(ATCA_HEAP) && ATCA_CA_SUPPORT
                 else
                 {
                     const atcacert_cert_element_t * subj_element = NULL;
@@ -552,13 +573,18 @@ static CK_RV pkcs11_cert_get_subject_key_id(CK_VOID_PTR pObject, CK_ATTRIBUTE_PT
     CK_RV read_cache = CKR_GENERAL_ERROR;
     pkcs11_object_ptr obj_ptr = (pkcs11_object_ptr)pObject;
 
-    if (NULL != obj_ptr && NULL != psession)
+    if (NULL != obj_ptr)
     {
+        if (PKCS11_OBJECT_FLAG_TRUST_TYPE == (PKCS11_OBJECT_FLAG_TRUST_TYPE & obj_ptr->flags))
+        {
 #if defined(ATCA_TNGTLS_SUPPORT) || defined(ATCA_TNGLORA_SUPPORT) || defined(ATCA_TFLEX_SUPPORT)
-        pkcs11_cert_check_trust_data(obj_ptr);
+            (void)pkcs11_cert_check_trust_data(obj_ptr, psession);
 #endif
-
-        read_cache = pkcs11_cert_load_cache(psession, obj_ptr);
+        }
+        else
+        {
+            read_cache = pkcs11_cert_load_cache(psession, obj_ptr);
+        }
 
         if (NULL != obj_ptr->data)
         {
@@ -575,7 +601,7 @@ static CK_RV pkcs11_cert_get_subject_key_id(CK_VOID_PTR pObject, CK_ATTRIBUTE_PT
                 else
                 {
 #if ATCACERT_COMPCERT_EN
-                    cert_status = atcacert_read_subj_key_id(cert_cfg, subj_key_id);
+                    cert_status = atcacert_read_subj_key_id_ext(psession->slot->device_ctx, cert_cfg, subj_key_id);
 #endif
                 }
 
@@ -653,13 +679,18 @@ static CK_RV pkcs11_cert_get_authority_key_id(CK_VOID_PTR pObject, CK_ATTRIBUTE_
 {
     pkcs11_object_ptr obj_ptr = (pkcs11_object_ptr)pObject;
 
-    if (NULL != obj_ptr && NULL != psession)
+    if (NULL != obj_ptr)
     {
+        if (PKCS11_OBJECT_FLAG_TRUST_TYPE == (PKCS11_OBJECT_FLAG_TRUST_TYPE & obj_ptr->flags))
+        {
 #if defined(ATCA_TNGTLS_SUPPORT) || defined(ATCA_TNGLORA_SUPPORT) || defined(ATCA_TFLEX_SUPPORT)
-        pkcs11_cert_check_trust_data(obj_ptr);
+            (void)pkcs11_cert_check_trust_data(obj_ptr, psession);
 #endif
-
-        (void)pkcs11_cert_load_cache(psession, obj_ptr);
+        }
+        else
+        {
+            (void)pkcs11_cert_load_cache(psession, obj_ptr);
+        }
 
         if (NULL != obj_ptr->data)
         {
@@ -809,24 +840,36 @@ static CK_RV pkcs11_cert_get_subj_key(CK_VOID_PTR pObject, CK_ATTRIBUTE_PTR pAtt
     pkcs11_object_ptr obj_ptr = (pkcs11_object_ptr)pObject;
     CK_RV rv = CKR_ARGUMENTS_BAD;
 
-    if (obj_ptr)
+    if (NULL != obj_ptr)
     {
         CK_RV read_cache = CKR_GENERAL_ERROR;
+        if (PKCS11_OBJECT_FLAG_TRUST_TYPE == (PKCS11_OBJECT_FLAG_TRUST_TYPE & obj_ptr->flags))
+        {
 #if defined(ATCA_TNGTLS_SUPPORT) || defined(ATCA_TNGLORA_SUPPORT) || defined(ATCA_TFLEX_SUPPORT)
-        pkcs11_cert_check_trust_data(obj_ptr);
+            (void)pkcs11_cert_check_trust_data(obj_ptr, psession);
 #endif
-        read_cache = pkcs11_cert_load_cache(psession, obj_ptr);
+        }
+        else
+        {
+            read_cache = pkcs11_cert_load_cache(psession, obj_ptr);
+        }
         if (NULL != obj_ptr->data)
         {
             atcacert_def_t * cert_cfg = (atcacert_def_t*)obj_ptr->data;
 
             if (CKR_OK == read_cache)
             {
-                uint8_t subj_public_key[64] = { 0 };
+#if ATCA_TA_SUPPORT && PKCS11_RSA_SUPPORT_ENABLE
+                uint8_t subj_public_key[PKCS11_MAX_ECC_RSA_PB_KEY_SIZE] = { 0 };
+#else
+                uint8_t subj_public_key[PKCS11_MAX_ECC_PB_KEY_SIZE] = { 0 };
+#endif
 
-                if (ATCA_SUCCESS == (atcacert_get_subj_public_key(cert_def, NULL, 0, &subj_public_key)))
+                cal_buffer subj_pubkey = CAL_BUF_INIT(sizeof(subj_public_key), subj_public_key);
+
+                if (ATCA_SUCCESS == (atcacert_get_subj_public_key(cert_cfg, NULL, 0, &subj_pubkey)))
                 {
-                    rv = pkcs11_attrib_fill(pAttribute, subj_public_key, (CK_ULONG)sizeof(subj_public_key));
+                    rv = pkcs11_attrib_fill(pAttribute, subj_public_key, (CK_ULONG)subj_pubkey.len);
                 }
                 else
                 {
@@ -855,62 +898,62 @@ static CK_RV pkcs11_cert_get_subj_key(CK_VOID_PTR pObject, CK_ATTRIBUTE_PTR pAtt
  */
 const pkcs11_attrib_model pkcs11_cert_x509public_attributes[] = {
     /** Object Class - CK_OBJECT_CLASS */
-    { CKA_CLASS,                      pkcs11_object_get_class                                  },
+    { CKA_CLASS,                      pkcs11_object_get_class          },
     /** CK_TRUE if object is a token object; CK_FALSE if object is a session object. Default is CK_FALSE. */
-    { CKA_TOKEN,                      pkcs11_attrib_true                                       },
+    { CKA_TOKEN,                      pkcs11_attrib_true               },
     /** CK_TRUE if object is a private object; CK_FALSE if object is a public object. */
-    { CKA_PRIVATE,                    pkcs11_token_get_access_type                             },
+    { CKA_PRIVATE,                    pkcs11_token_get_access_type     },
     /** CK_TRUE if object can be modified. Default is CK_TRUE. */
-    { CKA_MODIFIABLE,                 pkcs11_token_get_writable                                },
+    { CKA_MODIFIABLE,                 pkcs11_token_get_writable        },
     /** Description of the object(default empty). */
-    { CKA_LABEL,                      pkcs11_object_get_name                                   },
+    { CKA_LABEL,                      pkcs11_object_get_name           },
     /** CK_TRUE if object can be copied using C_CopyObject.Defaults to CK_TRUE. */
-    { CKA_COPYABLE,                   pkcs11_attrib_false                                      },
+    { CKA_COPYABLE,                   pkcs11_attrib_false              },
     /** CK_TRUE if the object can be destroyed using C_DestroyObject. Default is CK_TRUE. */
-    { CKA_DESTROYABLE,                pkcs11_object_get_destroyable                            },
+    { CKA_DESTROYABLE,                pkcs11_object_get_destroyable    },
     /** Type of certificate */
-    { CKA_CERTIFICATE_TYPE,           pkcs11_cert_get_type                                     },
+    { CKA_CERTIFICATE_TYPE,           pkcs11_cert_get_type             },
     /** The certificate can be trusted for the application that it was created. */
-    { CKA_TRUSTED,                    pkcs11_cert_get_trusted_flag                             },
+    { CKA_TRUSTED,                    pkcs11_cert_get_trusted_flag     },
     /** Default CK_CERTIFICATE_CATEGORY_UNSPECIFIED) */
-    { CKA_CERTIFICATE_CATEGORY,       pkcs11_object_get_type                                   },
+    { CKA_CERTIFICATE_CATEGORY,       pkcs11_object_get_type           },
     /** Checksum */
-    { CKA_CHECK_VALUE,                NULL_PTR                                                 },
+    { CKA_CHECK_VALUE,                NULL_PTR                         },
     /** Start date for the certificate (default empty) */
-    { CKA_START_DATE,                 pkcs11_get_issue_date                                    },
+    { CKA_START_DATE,                 pkcs11_get_issue_date            },
     /** End date for the certificate (default empty) */
-    { CKA_END_DATE,                   pkcs11_get_expire_date                                   },
+    { CKA_END_DATE,                   pkcs11_get_expire_date           },
     /** ALL: DER-encoding of the SubjectPublicKeyInfo for the public key
        contained in this certificate (default empty)
        SubjectPublicKeyInfo ::= SEQUENCE {
        algorithm AlgorithmIdentifier,
        subjectPublicKey BIT_STRING } */
-    { CKA_PUBLIC_KEY_INFO,            pkcs11_attrib_empty                                      },
+    { CKA_PUBLIC_KEY_INFO,            pkcs11_attrib_empty              },
     /** DER-encoded Certificate subject name */
-    { CKA_SUBJECT,                    pkcs11_cert_get_subject                                  },
+    { CKA_SUBJECT,                    pkcs11_cert_get_subject          },
     /** Key identifier for public/private key pair (default empty) */
-    { CKA_ID,                         pkcs11_cert_get_subj_key                                 },
+    { CKA_ID,                         pkcs11_cert_get_subj_key         },
     /** DER-encoded Certificate issuer name (default empty)*/
-    { CKA_ISSUER,                     pkcs11_cert_get_issuer                                   },
+    { CKA_ISSUER,                     pkcs11_cert_get_issuer           },
     /** DER-encoding of the certificate serial number (default empty) */
-    { CKA_SERIAL_NUMBER,              pkcs11_cert_get_serial_num                               },
+    { CKA_SERIAL_NUMBER,              pkcs11_cert_get_serial_num       },
     /** BER-encoded Complete Certificate */
-    { CKA_VALUE,                      pkcs11_cert_get_encoded                                  },
+    { CKA_VALUE,                      pkcs11_cert_get_encoded          },
     /** If not empty this attribute gives the URL where the complete
        certificate can be obtained (default empty) */
-    { CKA_URL,                        pkcs11_attrib_empty                                      },
+    { CKA_URL,                        pkcs11_attrib_empty              },
     /** Hash of the subject public key (default empty). Hash algorithm is
        defined by CKA_NAME_HASH_ALGORITHM */
-    { CKA_HASH_OF_SUBJECT_PUBLIC_KEY, pkcs11_cert_get_subject_key_id                           },
+    { CKA_HASH_OF_SUBJECT_PUBLIC_KEY, pkcs11_cert_get_subject_key_id   },
     /** Hash of the issuer public key (default empty). Hash algorithm is
        defined by CKA_NAME_HASH_ALGORITHM */
-    { CKA_HASH_OF_ISSUER_PUBLIC_KEY,  pkcs11_cert_get_authority_key_id                         },
+    { CKA_HASH_OF_ISSUER_PUBLIC_KEY,  pkcs11_cert_get_authority_key_id },
     /** Java MIDP security domain. (default CK_SECURITY_DOMAIN_UNSPECIFIED) */
-    { CKA_JAVA_MIDP_SECURITY_DOMAIN,  NULL_PTR                                                 },
+    { CKA_JAVA_MIDP_SECURITY_DOMAIN,  NULL_PTR                         },
     /** Defines the mechanism used to calculate CKA_HASH_OF_SUBJECT_PUBLIC_KEY
        and CKA_HASH_OF_ISSUER_PUBLIC_KEY. If the attribute is not present then
        the type defaults to SHA-1. */
-    { CKA_NAME_HASH_ALGORITHM,        pkcs11_attrib_empty                                      },
+    { CKA_NAME_HASH_ALGORITHM,        pkcs11_attrib_empty              },
 };
 
 /* coverity[misra_c_2012_rule_5_1_violation:FALSE] C99 limit is 63 characters */
@@ -921,56 +964,56 @@ const CK_ULONG pkcs11_cert_x509public_attributes_count = (CK_ULONG)(PKCS11_UTIL_
  */
 const pkcs11_attrib_model pkcs11_cert_wtlspublic_attributes[] = {
     /** Object Class - CK_OBJECT_CLASS */
-    { CKA_CLASS,                      pkcs11_object_get_class                               },
+    { CKA_CLASS,                      pkcs11_object_get_class        },
     /** CK_TRUE if object is a token object; CK_FALSE if object is a session object. Default is CK_FALSE. */
-    { CKA_TOKEN,                      pkcs11_attrib_true                                    },
+    { CKA_TOKEN,                      pkcs11_attrib_true             },
     /** CK_TRUE if object is a private object; CK_FALSE if object is a public object. */
-    { CKA_PRIVATE,                    pkcs11_token_get_access_type                          },
+    { CKA_PRIVATE,                    pkcs11_token_get_access_type   },
     /** CK_TRUE if object can be modified. Default is CK_TRUE. */
-    { CKA_MODIFIABLE,                 NULL_PTR                                              },
+    { CKA_MODIFIABLE,                 NULL_PTR                       },
     /** Description of the object(default empty). */
-    { CKA_LABEL,                      pkcs11_object_get_name                                },
+    { CKA_LABEL,                      pkcs11_object_get_name         },
     /** CK_TRUE if object can be copied using C_CopyObject.Defaults to CK_TRUE. */
-    { CKA_COPYABLE,                   pkcs11_attrib_false                                   },
+    { CKA_COPYABLE,                   pkcs11_attrib_false            },
     /** CK_TRUE if the object can be destroyed using C_DestroyObject. Default is CK_TRUE. */
-    { CKA_DESTROYABLE,                pkcs11_object_get_destroyable                         },
+    { CKA_DESTROYABLE,                pkcs11_object_get_destroyable  },
     /** Type of certificate */
-    { CKA_CERTIFICATE_TYPE,           pkcs11_cert_get_type                                  },
+    { CKA_CERTIFICATE_TYPE,           pkcs11_cert_get_type           },
     /** The certificate can be trusted for the application that it was created. */
-    { CKA_TRUSTED,                    NULL_PTR                                              },
+    { CKA_TRUSTED,                    NULL_PTR                       },
     /** Default CK_CERTIFICATE_CATEGORY_UNSPECIFIED) */
-    { CKA_CERTIFICATE_CATEGORY,       pkcs11_object_get_type                                },
+    { CKA_CERTIFICATE_CATEGORY,       pkcs11_object_get_type         },
     /** Checksum */
-    { CKA_CHECK_VALUE,                NULL_PTR                                              },
+    { CKA_CHECK_VALUE,                NULL_PTR                       },
     /** Start date for the certificate (default empty) */
-    { CKA_START_DATE,                 pkcs11_attrib_empty                                   },
+    { CKA_START_DATE,                 pkcs11_attrib_empty            },
     /** End date for the certificate (default empty) */
-    { CKA_END_DATE,                   pkcs11_attrib_empty                                   },
+    { CKA_END_DATE,                   pkcs11_attrib_empty            },
     /** ALL: DER-encoding of the SubjectPublicKeyInfo for the public key
        contained in this certificate (default empty)
        SubjectPublicKeyInfo ::= SEQUENCE {
        algorithm AlgorithmIdentifier,
        subjectPublicKey BIT_STRING } */
-    { CKA_PUBLIC_KEY_INFO,            pkcs11_attrib_empty                                   },
+    { CKA_PUBLIC_KEY_INFO,            pkcs11_attrib_empty            },
     /** WTLS-encoded Certificate subject name */
-    { CKA_SUBJECT,                    pkcs11_attrib_empty                                   },
+    { CKA_SUBJECT,                    pkcs11_attrib_empty            },
     /** WTLS-encoded Certificate issuer name (default empty)*/
-    { CKA_ISSUER,                     pkcs11_attrib_empty                                   },
+    { CKA_ISSUER,                     pkcs11_attrib_empty            },
     /** WTLS-encoded Complete Certificate */
-    { CKA_VALUE,                      pkcs11_cert_get_encoded                               },
+    { CKA_VALUE,                      pkcs11_cert_get_encoded        },
     /** If not empty this attribute gives the URL where the complete
        certificate can be obtained (default empty) */
-    { CKA_URL,                        pkcs11_attrib_empty                                   },
+    { CKA_URL,                        pkcs11_attrib_empty            },
     /** Hash of the subject public key (default empty). Hash algorithm is
        defined by CKA_NAME_HASH_ALGORITHM */
-    { CKA_HASH_OF_SUBJECT_PUBLIC_KEY, pkcs11_cert_get_subject_key_id                        },
+    { CKA_HASH_OF_SUBJECT_PUBLIC_KEY, pkcs11_cert_get_subject_key_id },
     /** Hash of the issuer public key (default empty). Hash algorithm is
        defined by CKA_NAME_HASH_ALGORITHM */
-    { CKA_HASH_OF_ISSUER_PUBLIC_KEY,  pkcs11_attrib_empty                                   },
+    { CKA_HASH_OF_ISSUER_PUBLIC_KEY,  pkcs11_attrib_empty            },
     /** Defines the mechanism used to calculate CKA_HASH_OF_SUBJECT_PUBLIC_KEY
        and CKA_HASH_OF_ISSUER_PUBLIC_KEY. If the attribute is not present then
        the type defaults to SHA-1. */
-    { CKA_NAME_HASH_ALGORITHM,        pkcs11_attrib_empty                                   },
+    { CKA_NAME_HASH_ALGORITHM,        pkcs11_attrib_empty            },
 };
 
 /* coverity[misra_c_2012_rule_5_1_violation:FALSE] C99 limit is 63 characters */
@@ -981,56 +1024,56 @@ const CK_ULONG pkcs11_cert_wtlspublic_attributes_count = (CK_ULONG)(PKCS11_UTIL_
  */
 const pkcs11_attrib_model pkcs11_cert_x509_attributes[] = {
     /** Object Class - CK_OBJECT_CLASS */
-    { CKA_CLASS,                pkcs11_object_get_class                      },
+    { CKA_CLASS,                pkcs11_object_get_class       },
     /** CK_TRUE if object is a token object; CK_FALSE if object is a session object. Default is CK_FALSE. */
-    { CKA_TOKEN,                pkcs11_attrib_true                           },
+    { CKA_TOKEN,                pkcs11_attrib_true            },
     /** CK_TRUE if object is a private object; CK_FALSE if object is a public object. */
-    { CKA_PRIVATE,              pkcs11_token_get_access_type                 },
+    { CKA_PRIVATE,              pkcs11_token_get_access_type  },
     /** CK_TRUE if object can be modified. Default is CK_TRUE. */
-    { CKA_MODIFIABLE,           NULL_PTR                                     },
+    { CKA_MODIFIABLE,           NULL_PTR                      },
     /** Description of the object(default empty). */
-    { CKA_LABEL,                pkcs11_object_get_name                       },
+    { CKA_LABEL,                pkcs11_object_get_name        },
     /** CK_TRUE if object can be copied using C_CopyObject.Defaults to CK_TRUE. */
-    { CKA_COPYABLE,             pkcs11_attrib_false                          },
+    { CKA_COPYABLE,             pkcs11_attrib_false           },
     /** CK_TRUE if the object can be destroyed using C_DestroyObject. Default is CK_TRUE. */
-    { CKA_DESTROYABLE,          pkcs11_object_get_destroyable                },
+    { CKA_DESTROYABLE,          pkcs11_object_get_destroyable },
     /** Type of certificate */
-    { CKA_CERTIFICATE_TYPE,     pkcs11_cert_get_type                         },
+    { CKA_CERTIFICATE_TYPE,     pkcs11_cert_get_type          },
     /** The certificate can be trusted for the application that it was created. */
-    { CKA_TRUSTED,              NULL_PTR                                     },
+    { CKA_TRUSTED,              NULL_PTR                      },
     /** Default CK_CERTIFICATE_CATEGORY_UNSPECIFIED) */
-    { CKA_CERTIFICATE_CATEGORY, pkcs11_object_get_type                       },
+    { CKA_CERTIFICATE_CATEGORY, pkcs11_object_get_type        },
     /** Checksum */
-    { CKA_CHECK_VALUE,          NULL_PTR                                     },
+    { CKA_CHECK_VALUE,          NULL_PTR                      },
     /** Start date for the certificate (default empty) */
-    { CKA_START_DATE,           pkcs11_attrib_empty                          },
+    { CKA_START_DATE,           pkcs11_attrib_empty           },
     /** End date for the certificate (default empty) */
-    { CKA_END_DATE,             pkcs11_attrib_empty                          },
+    { CKA_END_DATE,             pkcs11_attrib_empty           },
     /** ALL: DER-encoding of the SubjectPublicKeyInfo for the public key
        contained in this certificate (default empty)
        SubjectPublicKeyInfo ::= SEQUENCE {
        algorithm AlgorithmIdentifier,
        subjectPublicKey BIT_STRING } */
-    { CKA_PUBLIC_KEY_INFO,      pkcs11_attrib_empty                          },
+    { CKA_PUBLIC_KEY_INFO,      pkcs11_attrib_empty           },
     /** X509: DER-encoding of the attribute certificate's subject field. This
        is distinct from the CKA_SUBJECT attribute contained in CKC_X_509
        certificates because the ASN.1 syntax and encoding are different. */
-    { CKA_OWNER,                pkcs11_attrib_empty                          },
+    { CKA_OWNER,                pkcs11_attrib_empty           },
     /** X509: DER-encoding of the attribute certificate's issuer field. This
        is distinct from the CKA_ISSUER attribute contained in CKC_X_509
        certificates because the ASN.1 syntax and encoding are different.
        (default empty) */
-    { CKA_AC_ISSUER,            pkcs11_attrib_empty                          },
+    { CKA_AC_ISSUER,            pkcs11_attrib_empty           },
     /** DER-encoding of the certificate serial number (default empty) */
-    { CKA_SERIAL_NUMBER,        pkcs11_attrib_empty                          },
+    { CKA_SERIAL_NUMBER,        pkcs11_attrib_empty           },
     /** X509: BER-encoding of a sequence of object identifier values corresponding
        to the attribute types contained in the certificate. When present, this
        field offers an opportunity for applications to search for a particular
        attribute certificate without fetching and parsing the certificate itself.
        (default empty) */
-    { CKA_ATTR_TYPES,           pkcs11_attrib_empty                          },
+    { CKA_ATTR_TYPES,           pkcs11_attrib_empty           },
     /** BER-encoded Complete Certificate */
-    { CKA_VALUE,                pkcs11_cert_get_encoded                      },
+    { CKA_VALUE,                pkcs11_cert_get_encoded       },
 };
 
 const CK_ULONG pkcs11_cert_x509_attributes_count = (CK_ULONG)(PKCS11_UTIL_ARRAY_SIZE(pkcs11_cert_x509_attributes));
@@ -1071,7 +1114,7 @@ CK_RV pkcs11_cert_x509_write(CK_VOID_PTR pObject, CK_ATTRIBUTE_PTR pAttribute, p
         if (ATCA_SUCCESS == status)
         {
             cal_buffer sAttribute = CAL_BUF_INIT(pAttribute->ulValueLen, pAttribute->pValue);
-            status = talib_write_element(device, obj_ptr->slot, &sAttribute);
+            status = talib_write_X509_cert(device, obj_ptr->slot, &sAttribute);
         }
 #else
         status = ATCA_NO_DEVICES;
@@ -1092,9 +1135,10 @@ CK_RV pkcs11_cert_x509_write(CK_VOID_PTR pObject, CK_ATTRIBUTE_PTR pAttribute, p
 CK_RV pkcs11_cert_clear_session_cache(pkcs11_session_ctx_ptr session_ctx)
 {
     CK_RV rv = CKR_GENERAL_ERROR;
+
     UNUSED_VAR(session_ctx);
 
-#if !defined(ATCA_NO_HEAP) && (FEATURE_ENABLED == ATCACERT_INTEGRATION_EN)
+#if defined(ATCA_HEAP) && (FEATURE_ENABLED == ATCACERT_INTEGRATION_EN)
     CK_ULONG i;
 
     for (i = 0; i < PKCS11_MAX_CERTS_CACHED; i++)
@@ -1139,9 +1183,10 @@ CK_RV pkcs11_cert_clear_session_cache(pkcs11_session_ctx_ptr session_ctx)
 CK_RV pkcs11_cert_clear_object_cache(pkcs11_object_ptr pObject)
 {
     CK_RV rv = CKR_GENERAL_ERROR;
+
     UNUSED_VAR(pObject);
 
-#if !defined(ATCA_NO_HEAP) && (FEATURE_ENABLED == ATCACERT_INTEGRATION_EN)
+#if defined(ATCA_HEAP) && (FEATURE_ENABLED == ATCACERT_INTEGRATION_EN)
     CK_ULONG i;
     atcacert_def_t *cert_def = pObject->data;
 

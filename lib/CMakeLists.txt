@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.1.0)
+cmake_minimum_required(VERSION 3.20.0)
 project(cryptoauth C)
 
 include(CheckSymbolExists)
@@ -18,6 +18,7 @@ option(ATCA_JWT_EN "Enable jwt functionality")
 option(ATCA_PKCS11 "Build PKCS11 Library")
 option(ATCA_BUILD_SHARED_LIBS "Build CryptoAuthLib as shared library" ON)
 option(ATCA_NO_HEAP "Do not use dynamic (heap) allocation functions" OFF)
+option(ATCA_CHECK_PARAMS_EN "Check parameters" ON)
 option(ATCA_USE_ATCAB_FUNCTIONS "Build the atcab_ api functions rather than using macros" OFF)
 option(ATCA_ENABLE_DEPRECATED "Enable the use of older APIs that that been replaced" OFF)
 option(ATCA_STRICT_C99 "Enable strict C99 compliance for the libray" OFF)
@@ -36,6 +37,14 @@ option(ATCA_TNG_LEGACY_SUPPORT "Include previous version of Trust & Go Certifica
 
 # WPC Options
 option(ATCA_WPC_SUPPORT "Include WPC Certificates")
+
+# SHA Options
+option(ATCAC_SHA384_EN "Include SHA384 support" OFF)
+option(ATCAC_SHA512_EN "Include SHA512 support" OFF)
+
+# Certificate Options
+option(ATCACERT_COMPCERT_EN       "Include Compressed Certificate support" ON)
+option(ATCACERT_FULLSTOREDCERT_EN "Include Full Certificate support" ON)
 
 # Device enablement
 option(ATCA_ATSHA204A_SUPPORT "Include support for ATSHA204A device" ON)
@@ -68,6 +77,11 @@ if (ATCA_MBEDTLS AND (ATCA_WOLFSSL OR ATCA_OPENSSL))
 message(FATAL_ERROR "Only one external SSL/TLS library can be supported")
 elseif (ATCA_WOLFSSL AND (ATCA_MBEDTLS OR ATCA_OPENSSL))
 message(FATAL_ERROR "Only one external SSL/TLS library can be supported")
+endif()
+
+# Full certificate integration option
+if (ATCA_MBEDTLS OR ATCA_WOLFSSL OR ATCA_OPENSSL)
+option(ATCACERT_INTEGRATION_EN "Enable ATCACERT full certificate integration" ON)
 endif()
 
 # Check Platform Information
@@ -281,7 +295,7 @@ if (ATCA_TA_SUPPORT)
 add_subdirectory(talib)
 endif()
 
-set_property(TARGET cryptoauth PROPERTY C_STANDARD 99)
+set_target_properties(cryptoauth PROPERTIES C_STANDARD 99 VERSION ${VERSION} SOVERSION ${VERSION_MAJOR})
 
 if(HAS_MALLOC)
 set(ATCA_PLATFORM_MALLOC malloc CACHE STRING "" FORCE)
@@ -313,6 +327,10 @@ target_include_directories(cryptoauth PUBLIC ${CMAKE_CURRENT_BINARY_DIR}
                                       ../third_party
                                       ../third_party/hidapi/hidapi
                                       ${USB_INCLUDE_DIR})
+
+if(APPLE)
+include_directories(cryptoauth PUBLIC ../third_party/hidapi/mac) 
+endif()
 
 if(ATCA_MBEDTLS)
 target_link_libraries(cryptoauth mbedtls)

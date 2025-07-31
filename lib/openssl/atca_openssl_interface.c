@@ -27,6 +27,10 @@
 #include "cryptoauthlib.h"
 #include "crypto/atca_crypto_sw.h"
 
+#ifdef __COVERITY__
+#pragma coverity compliance block deviate "MISRA C-2012 Rule 11.3" "Third party library (openssl) implementation requires pointer type casting"
+#endif
+
 #ifdef ATCA_OPENSSL
 #include <openssl/bn.h>
 #include <openssl/bio.h>
@@ -434,6 +438,7 @@ ATCA_STATUS atcac_sw_sha1_finish(
     return atca_openssl_md_finish((atca_evp_ctx*)ctx, digest, &outlen);
 }
 
+#if ATCAC_SHA256_EN
 /** \brief Initialize context for performing SHA256 hash in software.
  *
  * \return ATCA_SUCCESS on success, otherwise an error code.
@@ -471,6 +476,87 @@ ATCA_STATUS atcac_sw_sha2_256_finish(
 
     return atca_openssl_md_finish((atca_evp_ctx*)ctx, digest, &outlen);
 }
+#endif /* ATCAC_SHA256_EN */
+
+#if ATCAC_SHA384_EN
+/** \brief Initialize context for performing SHA384 hash in software.
+ *
+ * \return ATCA_SUCCESS on success, otherwise an error code.
+ */
+ATCA_STATUS atcac_sw_sha2_384_init(
+    struct atcac_sha2_384_ctx* ctx  /**< [in] pointer to a hash context */
+    )
+{
+    return atca_openssl_md_init((atca_evp_ctx*)ctx, EVP_sha384());
+}
+
+/** \brief Add data to a SHA384 hash.
+ *
+ * \return ATCA_SUCCESS on success, otherwise an error code.
+ */
+ATCA_STATUS atcac_sw_sha2_384_update(
+    struct atcac_sha2_384_ctx* ctx,      /**< [in] pointer to a hash context */
+    const uint8_t*             data,     /**< [in] input data buffer */
+    size_t                     data_size /**< [in] input data length */
+    )
+{
+    return atca_openssl_md_update((atca_evp_ctx*)ctx, data, data_size);
+}
+
+/** \brief Complete the SHA384 hash in software and return the digest.
+ *
+ * \return ATCA_SUCCESS on success, otherwise an error code.
+ */
+ATCA_STATUS atcac_sw_sha2_384_finish(
+    struct atcac_sha2_384_ctx* ctx,                              /**< [in] pointer to a hash context */
+    uint8_t                    digest[ATCA_SHA2_384_DIGEST_SIZE] /**< [out] output buffer (48 bytes) */
+    )
+{
+    unsigned int outlen = ATCA_SHA2_384_DIGEST_SIZE;
+
+    return atca_openssl_md_finish((atca_evp_ctx*)ctx, digest, &outlen);
+}
+#endif /* ATCAC_SHA384_EN */
+
+#if ATCAC_SHA512_EN
+/** \brief Initialize context for performing SHA512 hash in software.
+ *
+ * \return ATCA_SUCCESS on success, otherwise an error code.
+ */
+ATCA_STATUS atcac_sw_sha2_512_init(
+    struct atcac_sha2_512_ctx* ctx  /**< [in] pointer to a hash context */
+    )
+{
+    return atca_openssl_md_init((atca_evp_ctx*)ctx, EVP_sha512());
+}
+
+/** \brief Add data to a SHA512 hash.
+ *
+ * \return ATCA_SUCCESS on success, otherwise an error code.
+ */
+ATCA_STATUS atcac_sw_sha2_512_update(
+    struct atcac_sha2_512_ctx* ctx,      /**< [in] pointer to a hash context */
+    const uint8_t*             data,     /**< [in] input data buffer */
+    size_t                     data_size /**< [in] input data length */
+    )
+{
+    return atca_openssl_md_update((atca_evp_ctx*)ctx, data, data_size);
+}
+
+/** \brief Complete the SHA512 hash in software and return the digest.
+ *
+ * \return ATCA_SUCCESS on success, otherwise an error code.
+ */
+ATCA_STATUS atcac_sw_sha2_512_finish(
+    struct atcac_sha2_512_ctx* ctx,                              /**< [in] pointer to a hash context */
+    uint8_t                    digest[ATCA_SHA2_512_DIGEST_SIZE] /**< [out] output buffer (64 bytes) */
+    )
+{
+    unsigned int outlen = ATCA_SHA2_512_DIGEST_SIZE;
+
+    return atca_openssl_md_finish((atca_evp_ctx*)ctx, digest, &outlen);
+}
+#endif /* ATCAC_SHA512_EN */
 
 /** \brief Initialize context for performing CMAC in software.
  *
@@ -627,25 +713,54 @@ ATCA_STATUS atcac_pk_init(
 {
     ATCA_STATUS status = ATCA_BAD_PARAM;
 
-    ((void)key_type);
-
     if ((NULL != ctx) && (NULL != buf) && ((size_t)INT_MAX > buflen))
     {
         ctx->ptr = EVP_PKEY_new();
 
         if (NULL != ctx->ptr)
         {
-            int ret = EVP_PKEY_set_type((EVP_PKEY*)ctx->ptr, EVP_PKEY_EC);
+            int curve_nid = 0;
+            int ret = 0;
+
+            switch (key_type)
+            {
+                case ATCA_KEY_TYPE_ECCP256:
+                    curve_nid = NID_X9_62_prime256v1;
+                    break;
+        #if ATCA_TA_SUPPORT
+                case TA_KEY_TYPE_ECCP224:
+                    curve_nid = NID_secp224r1;
+                    break;
+                case TA_KEY_TYPE_ECCP384:
+                    curve_nid = NID_secp384r1;
+                    break;
+                case TA_KEY_TYPE_ECCP521:
+                    curve_nid = NID_secp521r1;
+                    break;
+        #endif
+                default:
+                    EVP_PKEY_free((EVP_PKEY*)ctx->ptr);
+                    ret = ATCA_BAD_PARAM;
+                    break;
+            }
+            if (0 != ret)
+            {
+                return ret;
+            }
+
+            ret = EVP_PKEY_set_type((EVP_PKEY*)ctx->ptr, EVP_PKEY_EC);
             if (0 < ret)
             {
-                EC_KEY* ec_key = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
+                EC_KEY* ec_key = EC_KEY_new_by_curve_name(curve_nid);
                 const EC_GROUP * ec_group = EC_KEY_get0_group(ec_key);
                 EC_POINT* ec_point = EC_POINT_new(ec_group);
 
                 if (pubkey)
                 {
-                    BIGNUM * x = BN_bin2bn(buf, 32, NULL);
-                    BIGNUM * y = BN_bin2bn(&buf[32], 32, NULL);
+                    size_t temp_len = buflen / 2u;
+                    int xy_len = (int)temp_len;
+                    BIGNUM * x = BN_bin2bn(buf, xy_len, NULL);
+                    BIGNUM * y = BN_bin2bn(&buf[xy_len], xy_len, NULL);
                     ret = EC_POINT_set_affine_coordinates(ec_group, ec_point, x, y, NULL);
                     BN_free(y);
                     BN_free(x);
@@ -764,27 +879,56 @@ ATCA_STATUS atcac_pk_public(
 {
     ATCA_STATUS status = ATCA_BAD_PARAM;
 
-    if (NULL != ctx && NULL != ctx->ptr && NULL != buf && NULL != buflen && *buflen >= 64u)
+    if (NULL != ctx && NULL != ctx->ptr && NULL != buf && NULL != buflen)
     {
         int ret = -1;
-        if (EVP_PKEY_EC == EVP_PKEY_id((EVP_PKEY*)ctx->ptr))
+        EVP_PKEY * pkey = (EVP_PKEY*)ctx->ptr;
+
+        if (EVP_PKEY_EC == EVP_PKEY_id(pkey))
         {
-            const EC_KEY * ec_key = EVP_PKEY_get0_EC_KEY((EVP_PKEY*)ctx->ptr);
+            const EC_KEY * ec_key = EVP_PKEY_get0_EC_KEY(pkey);
             if (NULL != ec_key)
             {
-                BIGNUM * x = BN_new();
-                BIGNUM * y = BN_new();
+                const EC_GROUP * group = EC_KEY_get0_group(ec_key);
+                int field_size = EC_GROUP_get_degree(group);
+                int coord_size = (field_size + 7) / 8;
+                size_t xy_coord_size = (coord_size > 0) ? ((size_t)coord_size * 2u) : (0u);
 
-                if (1 == (ret = EC_POINT_get_affine_coordinates(EC_KEY_get0_group(ec_key), EC_KEY_get0_public_key(ec_key), x, y, NULL)))
+                if ((0u != xy_coord_size) && (*buflen >= xy_coord_size))
                 {
-                    (void)BN_bn2bin(x, buf);
-                    (void)BN_bn2bin(y, &buf[32]);
-                    *buflen = 64u;
+                    BIGNUM * x = BN_new();
+                    BIGNUM * y = BN_new();
+
+                    if (1 == (ret = EC_POINT_get_affine_coordinates(group, EC_KEY_get0_public_key(ec_key), x, y, NULL)))
+                    {
+                        (void)BN_bn2binpad(x, buf, coord_size);
+                        (void)BN_bn2binpad(y, &buf[coord_size], coord_size);
+                        *buflen = xy_coord_size;
+                    }
+                    BN_free(x);
+                    BN_free(y);
                 }
-                BN_free(x);
-                BN_free(y);
             }
         }
+        else
+        {
+            const RSA * rsa_key = EVP_PKEY_get0_RSA(pkey);
+            if (NULL != rsa_key)
+            {
+                const BIGNUM * n = RSA_get0_n(rsa_key);
+                if (NULL != n)
+                {
+                    int n_len = BN_num_bytes(n);
+                    if (*buflen >= (size_t)n_len)
+                    {
+                        (void)BN_bn2bin(n, buf);
+                        *buflen = (size_t)n_len;
+                        ret = 1;
+                    }
+                }
+            }
+        }
+
         status = (ret > 0) ? ATCA_SUCCESS : ATCA_FUNC_FAIL;
     }
     return status;
@@ -805,7 +949,7 @@ ATCA_STATUS atcac_pk_sign(
     ATCA_STATUS status = ATCA_BAD_PARAM;
     int ret = 0;
 
-    if ((NULL != ctx) && (NULL != ctx->ptr) && (ATCA_SHA2_256_DIGEST_SIZE == dig_len))
+    if ((NULL != ctx) && (NULL != ctx->ptr))
     {
         if (EVP_PKEY_EC == EVP_PKEY_id((EVP_PKEY*)ctx->ptr))
         {
@@ -881,14 +1025,20 @@ ATCA_STATUS atcac_pk_verify(
     ATCA_STATUS status = ATCA_BAD_PARAM;
     int ret = 0;
 
-    if ((NULL != ctx) && (NULL != ctx->ptr) && (ATCA_SHA2_256_DIGEST_SIZE == dig_len))
+    if ((NULL != ctx) && (NULL != ctx->ptr))
     {
         ret = -1;
         if (EVP_PKEY_EC == EVP_PKEY_id((EVP_PKEY*)ctx->ptr))
         {
             ECDSA_SIG* ec_sig = ECDSA_SIG_new();
-            BIGNUM* r = BN_bin2bn(signature, 32, NULL);
-            BIGNUM* s = BN_bin2bn(&signature[32], 32, NULL);
+            int rs_len = 0;
+            if (sig_len <= (size_t)INT32_MAX)
+            {
+                size_t temp_len = sig_len / 2u;
+                rs_len = (int)temp_len;
+            }
+            BIGNUM* r = BN_bin2bn(signature, rs_len, NULL);
+            BIGNUM* s = BN_bin2bn(&signature[rs_len], rs_len, NULL);
 
             (void)ECDSA_SIG_set0(ec_sig, r, s);
 
@@ -1183,16 +1333,32 @@ void atcac_x509_free(void* cert)
     }
 }
 
-#if defined(ATCA_BUILD_SHARED_LIBS) || !defined(ATCA_NO_HEAP)
+#if defined(ATCA_BUILD_SHARED_LIBS) || defined(ATCA_HEAP)
 struct atcac_sha1_ctx * atcac_sha1_ctx_new(void)
 {
     return (struct atcac_sha1_ctx*)hal_malloc(sizeof(atcac_sha1_ctx_t));
 }
 
+#if ATCAC_SHA256_EN
 struct atcac_sha2_256_ctx * atcac_sha256_ctx_new(void)
 {
     return (struct atcac_sha2_256_ctx*)hal_malloc(sizeof(atcac_sha2_256_ctx_t));
 }
+#endif
+
+#if ATCAC_SHA384_EN
+struct atcac_sha2_384_ctx * atcac_sha384_ctx_new(void)
+{
+    return (struct atcac_sha2_384_ctx*)hal_malloc(sizeof(atcac_sha2_384_ctx_t));
+}
+#endif
+
+#if ATCAC_SHA512_EN
+struct atcac_sha2_512_ctx * atcac_sha512_ctx_new(void)
+{
+    return (struct atcac_sha2_512_ctx*)hal_malloc(sizeof(atcac_sha2_512_ctx_t));
+}
+#endif
 
 struct atcac_hmac_ctx * atcac_hmac_ctx_new(void)
 {
@@ -1219,10 +1385,26 @@ void atcac_sha1_ctx_free(struct atcac_sha1_ctx * ctx)
     hal_free(ctx);
 }
 
+#if ATCAC_SHA256_EN
 void atcac_sha256_ctx_free(struct atcac_sha2_256_ctx * ctx)
 {
     hal_free(ctx);
 }
+#endif
+
+#if ATCAC_SHA384_EN
+void atcac_sha384_ctx_free(struct atcac_sha2_384_ctx * ctx)
+{
+    hal_free(ctx);
+}
+#endif
+
+#if ATCAC_SHA512_EN
+void atcac_sha512_ctx_free(struct atcac_sha2_512_ctx * ctx)
+{
+    hal_free(ctx);
+}
+#endif
 
 void atcac_hmac_ctx_free(struct atcac_hmac_ctx * ctx)
 {

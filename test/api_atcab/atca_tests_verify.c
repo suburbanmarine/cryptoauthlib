@@ -200,6 +200,7 @@ TEST(atca_cmd_basic_test, verify_stored)
     uint8_t message[ATCA_SHA256_DIGEST_SIZE];
     uint8_t signature[ATCA_ECCP256_SIG_SIZE];
     uint8_t public_key[ATCA_ECCP256_PUBKEY_SIZE];
+    cal_buffer public_key_buf = CAL_BUF_INIT(sizeof(public_key), public_key);
 
     test_assert_data_is_locked();
 
@@ -210,7 +211,7 @@ TEST(atca_cmd_basic_test, verify_stored)
     TEST_ASSERT_EQUAL(ATCA_SUCCESS, status);
 
     // Generate new key pair
-    status = atca_test_genkey(private_key_id, public_key);
+    status = atca_test_genkey(atcab_get_device(), private_key_id, &public_key_buf);
     TEST_ASSERT_EQUAL(ATCA_SUCCESS, status);
 
     // Write public key to slot
@@ -268,7 +269,7 @@ TEST(atca_cmd_basic_test, verify_stored_on_reqrandom_set)
 
 #if defined(ATCA_MBEDTLS) || defined(ATCA_OPENSSL) || defined(ATCA_WOLFSSL)
     struct atcac_pk_ctx * sign_ctx;
-#if defined(ATCA_BUILD_SHARED_LIBS) || !defined(ATCA_NO_HEAP)
+#if defined(ATCA_BUILD_SHARED_LIBS) || defined(ATCA_HEAP)
     sign_ctx = atcac_pk_ctx_new();
     TEST_ASSERT_NOT_NULL(sign_ctx);
 #else
@@ -293,12 +294,13 @@ TEST(atca_cmd_basic_test, verify_stored_on_reqrandom_set)
     TEST_ASSERT_EQUAL(ATCA_SUCCESS, status);
 #else
     uint16_t private_key_id;
+    cal_buffer public_key_buf = CAL_BUF_INIT(sizeof(public_key), public_key);
 
     status = atca_test_config_get_id(TEST_TYPE_ECC_GENKEY, &private_key_id);
     TEST_ASSERT_EQUAL(ATCA_SUCCESS, status);
 
     // Generate new key pair
-    status = atca_test_genkey(private_key_id, public_key);
+    status = atca_test_genkey(atcab_get_device(), private_key_id, &public_key_buf);
     TEST_ASSERT_EQUAL(ATCA_SUCCESS, status);
 #endif
 
@@ -344,7 +346,7 @@ TEST(atca_cmd_basic_test, verify_stored_on_reqrandom_set)
     status = atcac_pk_free(sign_ctx);
     TEST_ASSERT_EQUAL(ATCA_SUCCESS, status);
 
-    #if defined(ATCA_BUILD_SHARED_LIBS) || !defined(ATCA_NO_HEAP)
+    #if defined(ATCA_BUILD_SHARED_LIBS) || defined(ATCA_HEAP)
         atcac_pk_ctx_free(sign_ctx);
     #endif
 #endif
@@ -361,12 +363,13 @@ TEST(atca_cmd_basic_test, verify_stored_mac)
     uint8_t system_nonce[ATCA_KEY_SIZE];
     uint8_t signature[ATCA_SIG_SIZE];
     uint8_t public_key[ATCA_PUB_KEY_SIZE];
+    cal_buffer public_key_buf = CAL_BUF_INIT(sizeof(public_key), public_key);
     bool is_verified = false;
 
     test_assert_data_is_locked();
 
     // Generate new key pair
-    status = atca_test_genkey(private_key_id, public_key);
+    status = atca_test_genkey(atcab_get_device(), private_key_id, &public_key_buf);
     TEST_ASSERT_EQUAL(ATCA_SUCCESS, status);
 
     // Write public key to slot
@@ -410,8 +413,10 @@ static void test_basic_verify_validate(void)
     uint8_t config[128];
     uint8_t sn[9];
     uint8_t validation_public_key[ATCA_PUB_KEY_SIZE];
+    cal_buffer validation_public_key_buf = CAL_BUF_INIT(sizeof(validation_public_key), validation_public_key);
     uint16_t validation_public_key_id = 0;
     uint8_t public_key[ATCA_PUB_KEY_SIZE];
+    cal_buffer public_key_buf = CAL_BUF_INIT(sizeof(public_key), public_key);
     uint8_t test_msg[32];
     uint8_t test_signature[ATCA_SIG_SIZE];
     bool is_verified = false;
@@ -440,7 +445,7 @@ static void test_basic_verify_validate(void)
 
     // Generate key pair for validation
     // Typically, the validation private key wouldn't be on the same device as its public key
-    status = atca_test_genkey(validation_private_key_id, validation_public_key);
+    status = atca_test_genkey(atcab_get_device(), validation_private_key_id, &validation_public_key_buf);
     TEST_ASSERT_EQUAL(ATCA_SUCCESS, status);
 
     // Write validation public key
@@ -455,7 +460,7 @@ static void test_basic_verify_validate(void)
     // key) is required to validate the new public key before it can be used.
 
     // Validation Authority: Generate new key pair.
-    status = atca_test_genkey(private_key_id, public_key);
+    status = atca_test_genkey(atcab_get_device(), private_key_id, &public_key_buf);
     TEST_ASSERT_EQUAL(ATCA_SUCCESS, status);
 
     // Create and sign some data for testing the new key pair
