@@ -329,7 +329,7 @@ target_include_directories(cryptoauth PUBLIC ${CMAKE_CURRENT_BINARY_DIR}
                                       ${USB_INCLUDE_DIR})
 
 if(APPLE)
-include_directories(cryptoauth PUBLIC ../third_party/hidapi/mac) 
+target_include_directories(cryptoauth PUBLIC ../third_party/hidapi/mac) 
 endif()
 
 if(ATCA_MBEDTLS)
